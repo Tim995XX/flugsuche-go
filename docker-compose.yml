@@ -1,0 +1,60 @@
+# Startet API, Redis und drei Mock-Anbieter:
+#   docker compose up --build
+#   curl "localhost:8080/search?from=LEJ&to=PMI&date=2026-12-20"
+
+# Die Mocks nutzen dasselbe Image wie die API, bauen es aber nicht selbst –
+# sonst bauen vier Dienste parallel dasselbe Image und kollidieren beim Speichern.
+x-mock: &mock
+  image: flugsuche-go
+  pull_policy: never # nicht von Docker Hub holen, wird vom api-Dienst gebaut
+  entrypoint: ["/app/mockprovider"]
+  healthcheck:
+    disable: true # das Image-Healthcheck gilt nur für die API
+  restart: unless-stopped
+
+services:
+  api:
+    build: .
+    image: flugsuche-go
+    ports:
+      - "8080:8080"
+    environment:
+      PROVIDERS: >-
+        airline-a=http://airline-a:9001,airline-b=http://airline-b:9002|format=skyjson,airline-c=http://airline-c:9003|format=nested
+      TIMEOUT: 800ms
+      CACHE: redis
+      CACHE_TTL: 5m
+      REDIS_ADDR: redis:6379
+    depends_on:
+      redis:
+        condition: service_healthy
+      airline-a:
+        condition: service_started
+      airline-b:
+        condition: service_started
+      airline-c:
+        condition: service_started
+    restart: unless-stopped
+
+  redis:
+    image: redis:8-alpine
+    # Reiner Cache: keine Persistenz, bei vollem Speicher die ältesten Schlüssel verdrängen.
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "64mb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+    restart: unless-stopped
+
+  airline-a:
+    <<: *mock
+    command: ["-name", "airline-a", "-port", "9001", "-delay", "200ms"]
+
+  airline-b:
+    <<: *mock
+    command: ["-name", "airline-b", "-port", "9002", "-delay", "400ms", "-failrate", "0.1", "-format", "skyjson"]
+
+  airline-c:
+    <<: *mock
+    command: ["-name", "airline-c", "-port", "9003", "-delay", "1200ms", "-format", "nested"]

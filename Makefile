@@ -1,4 +1,4 @@
-.PHONY: run build mocks stop-mocks test test-race cover fmt vet lint
+.PHONY: run build mocks stop-mocks test test-race cover fmt vet lint docker-build up down
 
 # Drei Mock-Anbieter im Hintergrund starten (beenden mit: pkill -f mockprovider)
 mocks:
@@ -34,3 +34,13 @@ vet:
 # Benötigt golangci-lint: https://golangci-lint.run/welcome/install/
 lint:
 	golangci-lint run
+
+docker-build:
+	docker build -t flugsuche-go .
+
+# API + Redis + drei Mock-Anbieter
+up:
+	docker compose up --build -d
+
+down:
+	docker compose down

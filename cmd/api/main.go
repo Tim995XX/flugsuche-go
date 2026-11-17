@@ -6,6 +6,10 @@
 //	PROVIDERS  Kommagetrennte Liste name=url[|format=standard|skyjson|nested]
 //	           (Standard: drei lokale Mock-Anbieter mit je eigenem Format)
 //	TIMEOUT    Gesamt-Timeout pro Suche (Standard "800ms")
+//	CACHE      memory | redis | off (Standard "memory")
+//	CACHE_TTL  Lebensdauer eines Cache-Eintrags (Standard "5m")
+//	CACHE_MAX_ENTRIES  Obergrenze für den In-Memory-Cache (Standard 10000)
+//	REDIS_ADDR Adresse von Redis bei CACHE=redis (Standard "localhost:6379")
 package main
 
 import (
@@ -13,16 +17,19 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 	_ "time/tzdata" // Zeitzonen eingebettet – auch im Docker-Image ohne /usr/share/zoneinfo
 
 	"flugsuche-go/internal/api"
+	"flugsuche-go/internal/cache"
 	"flugsuche-go/internal/provider"
 	"flugsuche-go/internal/search"
 )
@@ -33,6 +40,11 @@ const defaultProviders = "airline-a=http://localhost:9001," +
 
 func main() {
 	addr := env("ADDR", ":8080")
+
+	// "api healthcheck" für Docker: Das distroless-Image hat weder Shell noch curl.
+	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
+		os.Exit(healthcheck(addr))
+	}
 	timeout, err := time.ParseDuration(env("TIMEOUT", "800ms"))
 	if err != nil {
 		slog.Error("ungültiges TIMEOUT", "err", err)
@@ -44,6 +56,13 @@ func main() {
 		slog.Error("ungültige PROVIDERS", "err", err)
 		os.Exit(1)
 	}
+
+	providers, closeCache, err := withCache(providers)
+	if err != nil {
+		slog.Error("cache-konfiguration", "err", err)
+		os.Exit(1)
+	}
+	defer closeCache()
 
 	svc := search.NewService(providers, timeout)
 	srv := &http.Server{
@@ -72,6 +91,69 @@ func main() {
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown", "err", err)
 	}
+}
+
+// healthcheck fragt /health des laufenden Servers ab; 0 = gesund.
+func healthcheck(addr string) int {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "ADDR:", err)
+		return 1
+	}
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "localhost"
+	}
+	client := &http.Client{Timeout: 2 * time.Second}
+	resp, err := client.Get("http://" + net.JoinHostPort(host, port) + "/health")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintln(os.Stderr, "status", resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
+// withCache legt je nach CACHE einen Cache vor alle Anbieter.
+// Die zurückgegebene Funktion gibt Ressourcen (Redis-Verbindungen) frei.
+func withCache(providers []provider.Provider) ([]provider.Provider, func(), error) {
+	noop := func() {}
+	mode := env("CACHE", "memory")
+	if mode == "off" {
+		slog.Info("cache aus")
+		return providers, noop, nil
+	}
+	ttl, err := time.ParseDuration(env("CACHE_TTL", "5m"))
+	if err != nil || ttl <= 0 {
+		return nil, noop, fmt.Errorf("ungültige CACHE_TTL %q", os.Getenv("CACHE_TTL"))
+	}
+
+	switch mode {
+	case "memory":
+		maxEntries, err := strconv.Atoi(env("CACHE_MAX_ENTRIES", "10000"))
+		if err != nil || maxEntries < 1 {
+			return nil, noop, fmt.Errorf("ungültige CACHE_MAX_ENTRIES %q", os.Getenv("CACHE_MAX_ENTRIES"))
+		}
+		slog.Info("cache", "typ", "memory", "ttl", ttl, "max_entries", maxEntries)
+		return cache.WrapAll(providers, cache.NewMemory(maxEntries), ttl), noop, nil
+
+	case "redis":
+		addr := env("REDIS_ADDR", "localhost:6379")
+		r := cache.NewRedis(addr)
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		// Nicht abbrechen, wenn Redis (noch) nicht erreichbar ist: Die Suche funktioniert
+		// auch ohne Cache, und sobald Redis da ist, wird er automatisch benutzt.
+		if err := r.Ping(ctx); err != nil {
+			slog.Warn("redis nicht erreichbar – suche läuft vorerst ohne cache", "addr", addr, "err", err)
+		}
+		slog.Info("cache", "typ", "redis", "addr", addr, "ttl", ttl)
+		return cache.WrapAll(providers, r, ttl), func() { r.Close() }, nil
+	}
+	return nil, noop, fmt.Errorf("unbekannter CACHE %q (memory, redis, off)", mode)
 }
 
 // parseProviders liest PROVIDERS im Format
