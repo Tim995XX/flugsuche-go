@@ -3,8 +3,8 @@
 # Drei Mock-Anbieter im Hintergrund starten (beenden mit: pkill -f mockprovider)
 mocks:
 	go run ./cmd/mockprovider -name airline-a -port 9001 -delay 200ms &
-	go run ./cmd/mockprovider -name airline-b -port 9002 -delay 400ms -failrate 0.1 &
-	go run ./cmd/mockprovider -name airline-c -port 9003 -delay 1200ms &
+	go run ./cmd/mockprovider -name airline-b -port 9002 -delay 400ms -failrate 0.1 -format skyjson &
+	go run ./cmd/mockprovider -name airline-c -port 9003 -delay 1200ms -format nested &
 
 stop-mocks:
 	-pkill -f mockprovider

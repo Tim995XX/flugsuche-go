@@ -3,7 +3,8 @@
 // Konfiguration über Umgebungsvariablen:
 //
 //	ADDR       Listen-Adresse (Standard ":8080")
-//	PROVIDERS  Kommagetrennte Liste name=url (Standard: drei lokale Mock-Anbieter)
+//	PROVIDERS  Kommagetrennte Liste name=url[|format=standard|skyjson|nested]
+//	           (Standard: drei lokale Mock-Anbieter mit je eigenem Format)
 //	TIMEOUT    Gesamt-Timeout pro Suche (Standard "800ms")
 package main
 
@@ -19,13 +20,16 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	_ "time/tzdata" // Zeitzonen eingebettet – auch im Docker-Image ohne /usr/share/zoneinfo
 
 	"flugsuche-go/internal/api"
 	"flugsuche-go/internal/provider"
 	"flugsuche-go/internal/search"
 )
 
-const defaultProviders = "airline-a=http://localhost:9001,airline-b=http://localhost:9002,airline-c=http://localhost:9003"
+const defaultProviders = "airline-a=http://localhost:9001," +
+	"airline-b=http://localhost:9002|format=skyjson," +
+	"airline-c=http://localhost:9003|format=nested"
 
 func main() {
 	addr := env("ADDR", ":8080")
@@ -70,13 +74,19 @@ func main() {
 	}
 }
 
+// parseProviders liest PROVIDERS im Format
+//
+//	name=url[|format=<format>],name=url[|format=<format>],…
+//
+// Ohne format wird provider.DefaultFormat benutzt.
 func parseProviders(s string) ([]provider.Provider, error) {
 	var out []provider.Provider
 	seen := make(map[string]bool)
-	for _, part := range strings.Split(s, ",") {
-		name, rawURL, ok := strings.Cut(strings.TrimSpace(part), "=")
+	for _, entry := range strings.Split(s, ",") {
+		head, opts, _ := strings.Cut(strings.TrimSpace(entry), "|")
+		name, rawURL, ok := strings.Cut(head, "=")
 		if !ok || name == "" || rawURL == "" {
-			return nil, fmt.Errorf("erwarte name=url, bekommen: %q", part)
+			return nil, fmt.Errorf("erwarte name=url, bekommen: %q", entry)
 		}
 		if seen[name] {
 			return nil, fmt.Errorf("anbieter %q doppelt angegeben", name)
@@ -85,8 +95,26 @@ func parseProviders(s string) ([]provider.Provider, error) {
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 			return nil, fmt.Errorf("anbieter %q: ungültige URL %q", name, rawURL)
 		}
+
+		format := provider.DefaultFormat
+		if opts != "" {
+			for _, opt := range strings.Split(opts, "|") {
+				key, val, _ := strings.Cut(opt, "=")
+				switch key {
+				case "format":
+					format = val
+				default:
+					return nil, fmt.Errorf("anbieter %q: unbekannte option %q", name, key)
+				}
+			}
+		}
+		dec, err := provider.FormatByName(format)
+		if err != nil {
+			return nil, fmt.Errorf("anbieter %q: %w", name, err)
+		}
+
 		seen[name] = true
-		out = append(out, provider.NewHTTP(name, rawURL, nil))
+		out = append(out, provider.NewHTTP(provider.Config{Name: name, BaseURL: rawURL, Decoder: dec}))
 	}
 	return out, nil
 }

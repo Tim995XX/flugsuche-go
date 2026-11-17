@@ -1,9 +1,13 @@
 // Package provider kapselt den Zugriff auf externe Flug-Anbieter.
+//
+// Jeder Anbieter hat sein eigenes JSON-Format. HTTPProvider übernimmt alles,
+// was für alle gleich ist (HTTP, Statuscodes, Größenlimit, Plausibilitätsprüfung,
+// Umrechnung in EUR); pro Format gibt es nur einen kleinen Decoder (formats.go).
 package provider
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"flugsuche-go/internal/currency"
 	"flugsuche-go/internal/flight"
 )
 
@@ -25,19 +30,43 @@ type Provider interface {
 // Anbieter den Server nicht mit riesigen Antworten lahmlegen kann.
 const maxResponseBytes = 1 << 20 // 1 MiB
 
+// Config beschreibt einen HTTP-Anbieter. Nur Name und BaseURL sind Pflicht.
+type Config struct {
+	Name      string
+	BaseURL   string
+	Decoder   Decoder            // Standard: Format "standard"
+	Converter currency.Converter // Standard: currency.Default
+	Client    *http.Client       // Standard: Client mit 5 s Timeout
+}
+
 // HTTPProvider fragt einen Anbieter über eine JSON-HTTP-API ab.
 type HTTPProvider struct {
 	name    string
 	baseURL string
+	decode  Decoder
+	conv    currency.Converter
 	client  *http.Client
 }
 
 // NewHTTP erzeugt einen HTTP-basierten Anbieter.
-func NewHTTP(name, baseURL string, client *http.Client) *HTTPProvider {
-	if client == nil {
-		client = &http.Client{Timeout: 5 * time.Second}
+func NewHTTP(cfg Config) *HTTPProvider {
+	p := &HTTPProvider{
+		name:    cfg.Name,
+		baseURL: strings.TrimRight(cfg.BaseURL, "/"),
+		decode:  cfg.Decoder,
+		conv:    cfg.Converter,
+		client:  cfg.Client,
 	}
-	return &HTTPProvider{name: name, baseURL: strings.TrimRight(baseURL, "/"), client: client}
+	if p.decode == nil {
+		p.decode = decodeStandard
+	}
+	if p.conv == nil {
+		p.conv = currency.Default
+	}
+	if p.client == nil {
+		p.client = &http.Client{Timeout: 5 * time.Second}
+	}
+	return p
 }
 
 func (p *HTTPProvider) Name() string { return p.name }
@@ -63,12 +92,55 @@ func (p *HTTPProvider) Search(ctx context.Context, q flight.Query) ([]flight.Off
 		return nil, fmt.Errorf("%s: unerwarteter status %d", p.name, resp.StatusCode)
 	}
 
-	var offers []flight.Offer
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxResponseBytes)).Decode(&offers); err != nil {
+	offers, err := p.decode(io.LimitReader(resp.Body, maxResponseBytes))
+	if err != nil {
 		return nil, fmt.Errorf("%s: antwort dekodieren: %w", p.name, err)
 	}
 	for i := range offers {
-		offers[i].Provider = p.name
+		if err := p.normalize(&offers[i], q); err != nil {
+			return nil, fmt.Errorf("%s: angebot %d (%q): %w", p.name, i, offers[i].FlightNumber, err)
+		}
 	}
 	return offers, nil
+}
+
+// normalize prüft ein Angebot auf Plausibilität und rechnet den Preis in EUR um.
+// Lieber ein Anbieter-Fehler als ein falsches Angebot ganz oben in der Liste.
+func (p *HTTPProvider) normalize(o *flight.Offer, q flight.Query) error {
+	o.Provider = p.name // vom Anbieter gemeldete Namen sind nicht vertrauenswürdig
+	if o.From == "" {
+		o.From = q.From
+	}
+	if o.To == "" {
+		o.To = q.To
+	}
+	o.From, o.To = strings.ToUpper(o.From), strings.ToUpper(o.To)
+	o.Currency = strings.ToUpper(o.Currency)
+
+	switch {
+	case o.FlightNumber == "":
+		return errors.New("flugnummer fehlt")
+	case o.From != q.From || o.To != q.To:
+		return fmt.Errorf("falsche strecke %s-%s", o.From, o.To)
+	case o.Departure.IsZero():
+		return errors.New("abflugzeit fehlt")
+	case !o.Arrival.After(o.Departure):
+		return errors.New("ankunft liegt nicht nach dem abflug")
+	case o.PriceCents <= 0:
+		return fmt.Errorf("ungültiger preis %d", o.PriceCents)
+	case o.Currency == "":
+		return errors.New("währung fehlt")
+	}
+
+	o.Original = nil
+	if o.Currency == currency.EUR {
+		return nil
+	}
+	eur, err := p.conv.ToEUR(o.PriceCents, o.Currency)
+	if err != nil {
+		return err
+	}
+	o.Original = &flight.Price{AmountCents: o.PriceCents, Currency: o.Currency}
+	o.PriceCents, o.Currency = eur, currency.EUR
+	return nil
 }

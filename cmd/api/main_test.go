@@ -19,6 +19,11 @@ func TestParseProviders(t *testing.T) {
 		{in: "a=localhost:9001", wantErr: true},      // fehlendes Schema
 		{in: "a=ftp://x", wantErr: true},             // falsches Schema
 		{in: "a=http://", wantErr: true},             // kein Host
+		{in: "a=http://x|format=skyjson,b=http://y|format=nested", want: []string{"a", "b"}},
+		{in: "a=http://x|format=standard", want: []string{"a"}},
+		{in: "a=http://x|format=xml", wantErr: true}, // unbekanntes Format
+		{in: "a=http://x|format=", wantErr: true},    // leeres Format
+		{in: "a=http://x|timeout=1s", wantErr: true}, // unbekannte Option
 	}
 
 	for _, tt := range tests {

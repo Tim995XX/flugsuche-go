@@ -18,8 +18,15 @@ type Offer struct {
 	To           string    `json:"to"`
 	Departure    time.Time `json:"departure"`
 	Arrival      time.Time `json:"arrival"`
-	PriceCents   int       `json:"price_cents"` // Geldbeträge nie als float!
+	PriceCents   int       `json:"price_cents"` // Geldbeträge nie als float! Nach der Normalisierung immer EUR.
 	Currency     string    `json:"currency"`
+	Original     *Price    `json:"original_price,omitempty"` // gesetzt, wenn umgerechnet wurde
+}
+
+// Price ist ein Geldbetrag in der kleinsten Einheit der Währung (Cent, Pence, …).
+type Price struct {
+	AmountCents int    `json:"amount_cents"`
+	Currency    string `json:"currency"`
 }
 
 // Duration liefert die Flugdauer.
