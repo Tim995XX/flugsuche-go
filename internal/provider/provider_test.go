@@ -135,6 +135,9 @@ func TestHTTPProviderErrors(t *testing.T) {
 		{"ankunft vor abflug", standardOffer("arrival", `"2026-12-20T07:00:00Z"`), "ankunft liegt nicht nach"},
 		{"preis null", standardOffer("price_cents", "0"), "ungültiger preis"},
 		{"preis negativ", standardOffer("price_cents", "-100"), "ungültiger preis"},
+		{"preis riesig usd (überlauf)", standardOffer("price_cents", "9000000000000000000", "currency", `"USD"`), "betrag zu groß"},
+		{"preis unplausibel eur", standardOffer("price_cents", "10000001"), "unplausibler preis"},
+		{"preis unplausibel nach umrechnung", standardOffer("price_cents", "9000000", "currency", `"GBP"`), "unplausibler preis"},
 		{"währung fehlt", standardOffer("currency", ""), "währung fehlt"},
 		{"währung unbekannt", standardOffer("currency", `"XYZ"`), "unbekannte währung"},
 	}

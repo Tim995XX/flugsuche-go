@@ -30,6 +30,10 @@ type Provider interface {
 // Anbieter den Server nicht mit riesigen Antworten lahmlegen kann.
 const maxResponseBytes = 1 << 20 // 1 MiB
 
+// maxPriceCentsEUR ist der höchste plausible Preis eines Fluges (100.000 €).
+// Alles darüber ist mit hoher Wahrscheinlichkeit ein Fehler des Anbieters.
+const maxPriceCentsEUR = 100_000_00
+
 // Config beschreibt einen HTTP-Anbieter. Nur Name und BaseURL sind Pflicht.
 type Config struct {
 	Name      string
@@ -133,14 +137,16 @@ func (p *HTTPProvider) normalize(o *flight.Offer, q flight.Query) error {
 	}
 
 	o.Original = nil
-	if o.Currency == currency.EUR {
-		return nil
+	if o.Currency != currency.EUR {
+		eur, err := p.conv.ToEUR(o.PriceCents, o.Currency)
+		if err != nil {
+			return err
+		}
+		o.Original = &flight.Price{AmountCents: o.PriceCents, Currency: o.Currency}
+		o.PriceCents, o.Currency = eur, currency.EUR
 	}
-	eur, err := p.conv.ToEUR(o.PriceCents, o.Currency)
-	if err != nil {
-		return err
+	if o.PriceCents > maxPriceCentsEUR {
+		return fmt.Errorf("unplausibler preis %d EUR-Cent (max. %d)", o.PriceCents, maxPriceCentsEUR)
 	}
-	o.Original = &flight.Price{AmountCents: o.PriceCents, Currency: o.Currency}
-	o.PriceCents, o.Currency = eur, currency.EUR
 	return nil
 }

@@ -3,6 +3,7 @@ package cache
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -43,7 +44,7 @@ func stores(t *testing.T) map[string]Store {
 	mr := miniredis.RunT(t)
 	r := NewRedis(mr.Addr())
 	t.Cleanup(func() { r.Close() })
-	return map[string]Store{"memory": NewMemory(100), "redis": r}
+	return map[string]Store{"memory": NewMemory(1 << 20), "redis": r}
 }
 
 func TestCacheHit(t *testing.T) {
@@ -138,7 +139,7 @@ func TestRedisDownFallsThrough(t *testing.T) {
 }
 
 func TestCorruptEntryIsIgnored(t *testing.T) {
-	store := NewMemory(10)
+	store := NewMemory(1 << 20)
 	store.Set(context.Background(), Key("zähler", query), []byte("kein json"), time.Minute)
 
 	next := &countingProvider{}
@@ -151,7 +152,7 @@ func TestCorruptEntryIsIgnored(t *testing.T) {
 func TestMemoryTTLAndEviction(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	m := NewMemory(2)
+	m := NewMemory(4) // jeder Eintrag hier: 1 Byte Schlüssel + 1 Byte Wert → Platz für 2
 	m.now = func() time.Time { return now }
 
 	m.Set(ctx, "a", []byte("1"), time.Minute)
@@ -163,8 +164,8 @@ func TestMemoryTTLAndEviction(t *testing.T) {
 	if _, ok, _ := m.Get(ctx, "a"); ok {
 		t.Fatal("a sollte genau nach TTL abgelaufen sein")
 	}
-	if m.Len() != 0 {
-		t.Errorf("Len = %d, abgelaufener Eintrag sollte beim Lesen entfernt werden", m.Len())
+	if m.Len() != 0 || m.Bytes() != 0 {
+		t.Errorf("Len = %d, Bytes = %d, abgelaufener Eintrag sollte beim Lesen entfernt werden", m.Len(), m.Bytes())
 	}
 
 	m.Set(ctx, "b", []byte("2"), time.Second)
@@ -188,13 +189,38 @@ func TestMemoryTTLAndEviction(t *testing.T) {
 
 	// Überschreiben eines vorhandenen Schlüssels verdrängt nichts.
 	m.Set(ctx, "e", []byte("6"), time.Hour)
-	if m.Len() != 2 {
-		t.Errorf("Len = %d nach Überschreiben, want 2", m.Len())
+	if m.Len() != 2 || m.Bytes() != 4 {
+		t.Errorf("Len = %d, Bytes = %d nach Überschreiben, want 2 / 4", m.Len(), m.Bytes())
+	}
+}
+
+func TestMemoryByteLimit(t *testing.T) {
+	ctx := context.Background()
+	const limit = 10 << 20 // 10 MiB
+	m := NewMemory(limit)
+
+	big := make([]byte, 1<<20) // 1 MiB – so groß darf eine Anbieter-Antwort sein
+	for i := 0; i < 100; i++ {
+		m.Set(ctx, fmt.Sprintf("k%d", i), big, time.Hour)
+	}
+	if n := m.Len(); n > 10 || m.Bytes() > limit {
+		t.Errorf("%d Einträge à 1 MiB (%d Bytes) im Cache – Grenze von 10 MiB überschritten", n, m.Bytes())
+	}
+	if _, ok, _ := m.Get(ctx, "k99"); !ok {
+		t.Error("der zuletzt geschriebene Eintrag sollte im Cache sein")
+	}
+
+	// Ein Eintrag, der allein größer als das Limit ist, wird gar nicht erst gespeichert.
+	if err := m.Set(ctx, "riesig", make([]byte, limit+1), time.Hour); err == nil {
+		t.Error("zu großer Eintrag: Fehler erwartet")
+	}
+	if _, ok, _ := m.Get(ctx, "riesig"); ok {
+		t.Error("zu großer Eintrag wurde gespeichert")
 	}
 }
 
 func TestMemoryCopiesValue(t *testing.T) {
-	m := NewMemory(10)
+	m := NewMemory(1 << 20)
 	val := []byte("abc")
 	m.Set(context.Background(), "k", val, time.Minute)
 	val[0] = 'X'

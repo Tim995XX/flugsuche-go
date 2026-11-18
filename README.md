@@ -20,7 +20,7 @@ Ein kleiner Flugpreis-Vergleich in Go: Das Backend fragt mehrere Airline-Anbiete
 | `internal/api` | HTTP-Routing, Validierung der Eingaben |
 | `internal/search` | Paralleles Abfragen, Timeout, Deduplizierung, Sortierung |
 | `internal/provider` | `Provider`-Interface, HTTP-Implementierung, ein Decoder pro Antwortformat |
-| `internal/cache` | Cache pro Anbieter (Decorator), Stores: In-Memory mit TTL, Redis |
+| `internal/cache` | Cache pro Anbieter (Decorator), Stores: In-Memory mit TTL und Byte-Grenze, Redis |
 | `internal/currency` | Umrechnung in EUR (feste Kurstabelle hinter einem Interface) |
 | `internal/flight` | Domänen-Modelle (`Query`, `Offer`) |
 
@@ -53,7 +53,7 @@ make stop-mocks
 | `TIMEOUT` | `800ms` | Gesamt-Timeout pro Suche |
 | `CACHE` | `memory` | `memory`, `redis` oder `off` |
 | `CACHE_TTL` | `5m` | Lebensdauer eines Cache-Eintrags |
-| `CACHE_MAX_ENTRIES` | `10000` | Obergrenze für den In-Memory-Cache |
+| `CACHE_MAX_MB` | `64` | Obergrenze für den In-Memory-Cache in MiB |
 | `REDIS_ADDR` | `localhost:6379` | nur bei `CACHE=redis` |
 
 Die Mock-Anbieter sprechen absichtlich verschiedene Formate (siehe unten). `airline-c` antwortet außerdem absichtlich langsam (bis 1,2 s) und landet daher oft in `errors` – das zeigt, dass ein langsamer Anbieter die Suche nicht blockiert.
@@ -90,7 +90,10 @@ make test-race
 ## Entscheidungen
 
 - **Preise als Cent-Integer**, nicht als `float64` → keine Rundungsfehler.
-- **Ein Gesamt-Timeout pro Suche** statt Retries: Der Nutzer wartet lieber 800 ms auf 2 von 3 Anbietern als 3 s auf alle.
+- **Ein Gesamt-Timeout pro Suche** statt Retries: Der Nutzer wartet lieber 800 ms auf 2 von 3 Anbietern als 3 s auf alle. Der Service setzt das Timeout selbst durch – auch ein Anbieter, der den Context ignoriert, kann die Antwort nicht verzögern.
+- **Ein abstürzender Anbieter reißt den Server nicht mit**: Panics in Anbieter-Goroutinen werden abgefangen, geloggt (mit Stacktrace) und als Fehler dieses Anbieters gemeldet.
+- **Fehlermeldungen nach außen nur als Kategorie** (`timeout`, `abgebrochen`, `nicht verfügbar`): Interne URLs und Hostnamen der Anbieter stehen nur im Log.
+- **Preise mit Obergrenze**: Mehr als 100.000 € pro Flug gilt als Anbieterfehler; die Umrechnung erkennt Überläufe (sonst würde aus einem riesigen Preis ein negativer – und damit das „günstigste“ Angebot).
 - **Fast nur Standardbibliothek**: Router (`net/http`), Logging (`log/slog`). Einzige Abhängigkeit ist der Redis-Client (`go-redis`), in Tests zusätzlich `miniredis` – so laufen auch die Redis-Tests ohne laufendes Redis.
 - **Cache pro Anbieter statt pro Suche**: Ist ein Anbieter gerade langsam, wird nur er beim nächsten Mal erneut gefragt; die anderen kommen aus dem Cache. Fehler werden nie gecacht.
 - **Cache ist optional, nie kritisch**: Ist Redis weg, läuft die Suche ohne Cache weiter. Wiederholungsversuche von go-redis sind abgeschaltet – mit den Standardwerten kostete ein ausgefallenes Redis ~2 s pro Suche, mehr als das ganze Such-Timeout.

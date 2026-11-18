@@ -7,6 +7,7 @@ package currency
 import (
 	"errors"
 	"fmt"
+	"math"
 )
 
 // EUR ist die Zielwährung aller Preise im System.
@@ -39,8 +40,15 @@ func (r FixedRates) ToEUR(amountCents int, currency string) (int, error) {
 	if !ok {
 		return 0, fmt.Errorf("%w: %q", ErrUnknown, currency)
 	}
+	if rate <= 0 {
+		return 0, fmt.Errorf("ungültiger kurs %d für %s", rate, currency)
+	}
 	if amountCents < 0 {
 		return 0, fmt.Errorf("negativer betrag %d", amountCents)
+	}
+	// Schutz vor Überlauf: Sonst würde aus einem riesigen Betrag ein negativer Preis.
+	if int64(amountCents) > (math.MaxInt64-500_000)/rate {
+		return 0, fmt.Errorf("betrag zu groß: %d %s", amountCents, currency)
 	}
 	return int((int64(amountCents)*rate + 500_000) / 1_000_000), nil
 }

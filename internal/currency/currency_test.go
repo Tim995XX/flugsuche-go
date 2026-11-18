@@ -40,4 +40,12 @@ func TestFixedRatesErrors(t *testing.T) {
 	if _, err := Default.ToEUR(-1, EUR); err == nil {
 		t.Error("negativer Betrag sollte Fehler liefern")
 	}
+	// 9·10¹⁸ × 920.000 passt nicht in int64 – früher kam ein negativer Preis heraus.
+	if got, err := Default.ToEUR(9_000_000_000_000_000_000, "USD"); err == nil {
+		t.Errorf("Überlauf: ToEUR = %d, Fehler erwartet", got)
+	}
+	// Kurs 0 in der Tabelle darf nicht zu Division durch null (Panic) führen.
+	if _, err := (FixedRates{"XXX": 0}).ToEUR(100, "XXX"); err == nil {
+		t.Error("Kurs 0: Fehler erwartet")
+	}
 }

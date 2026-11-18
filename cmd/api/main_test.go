@@ -43,3 +43,11 @@ func TestParseProviders(t *testing.T) {
 		})
 	}
 }
+
+func TestNewServerTimeouts(t *testing.T) {
+	srv := newServer(":0", nil)
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.WriteTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Errorf("alle Timeouts müssen gesetzt sein: header=%v read=%v write=%v idle=%v",
+			srv.ReadHeaderTimeout, srv.ReadTimeout, srv.WriteTimeout, srv.IdleTimeout)
+	}
+}

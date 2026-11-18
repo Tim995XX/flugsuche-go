@@ -8,7 +8,7 @@
 //	TIMEOUT    Gesamt-Timeout pro Suche (Standard "800ms")
 //	CACHE      memory | redis | off (Standard "memory")
 //	CACHE_TTL  Lebensdauer eines Cache-Eintrags (Standard "5m")
-//	CACHE_MAX_ENTRIES  Obergrenze für den In-Memory-Cache (Standard 10000)
+//	CACHE_MAX_MB  Obergrenze für den In-Memory-Cache in MiB (Standard 64)
 //	REDIS_ADDR Adresse von Redis bei CACHE=redis (Standard "localhost:6379")
 package main
 
@@ -65,12 +65,7 @@ func main() {
 	defer closeCache()
 
 	svc := search.NewService(providers, timeout)
-	srv := &http.Server{
-		Addr:              addr,
-		Handler:           api.NewHandler(svc),
-		ReadHeaderTimeout: 5 * time.Second,
-		WriteTimeout:      10 * time.Second,
-	}
+	srv := newServer(addr, api.NewHandler(svc))
 
 	// Sauber herunterfahren bei Strg+C / SIGTERM (wichtig für Docker/Kubernetes).
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -90,6 +85,20 @@ func main() {
 	defer cancel()
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		slog.Error("shutdown", "err", err)
+	}
+}
+
+// newServer setzt alle Timeouts. Ohne IdleTimeout bleiben Keep-Alive-Verbindungen
+// unbegrenzt offen; ohne ReadTimeout kann ein Client den Request-Body endlos
+// langsam senden.
+func newServer(addr string, h http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           h,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
 }
 
@@ -133,12 +142,12 @@ func withCache(providers []provider.Provider) ([]provider.Provider, func(), erro
 
 	switch mode {
 	case "memory":
-		maxEntries, err := strconv.Atoi(env("CACHE_MAX_ENTRIES", "10000"))
-		if err != nil || maxEntries < 1 {
-			return nil, noop, fmt.Errorf("ungültige CACHE_MAX_ENTRIES %q", os.Getenv("CACHE_MAX_ENTRIES"))
+		maxMB, err := strconv.Atoi(env("CACHE_MAX_MB", "64"))
+		if err != nil || maxMB < 1 {
+			return nil, noop, fmt.Errorf("ungültige CACHE_MAX_MB %q", os.Getenv("CACHE_MAX_MB"))
 		}
-		slog.Info("cache", "typ", "memory", "ttl", ttl, "max_entries", maxEntries)
-		return cache.WrapAll(providers, cache.NewMemory(maxEntries), ttl), noop, nil
+		slog.Info("cache", "typ", "memory", "ttl", ttl, "max_mb", maxMB)
+		return cache.WrapAll(providers, cache.NewMemory(maxMB<<20), ttl), noop, nil
 
 	case "redis":
 		addr := env("REDIS_ADDR", "localhost:6379")
