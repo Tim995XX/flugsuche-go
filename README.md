@@ -112,3 +112,7 @@ make test-race
 - [ ] Schritt 4: GitHub Actions (`golangci-lint`, `go test -race`, Docker-Build)
 - [ ] Schritt 5: Prometheus-Metriken (`/metrics`: Latenz pro Anbieter, Cache-Hit-Rate) + Grafana-Dashboard
 - [ ] Schritt 6: Lasttest mit `k6`, Ergebnisse hier dokumentieren
+
+## Lizenz
+
+MIT – siehe [LICENSE](LICENSE).
