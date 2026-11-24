@@ -113,6 +113,10 @@ make test-race
 - [ ] Schritt 5: Prometheus-Metriken (`/metrics`: Latenz pro Anbieter, Cache-Hit-Rate) + Grafana-Dashboard
 - [ ] Schritt 6: Lasttest mit `k6`, Ergebnisse hier dokumentieren
 
+## Hinweis
+
+Dieses Projekt wurde mithilfe von Claude (Anthropic) erstellt.
+
 ## Lizenz
 
 MIT – siehe [LICENSE](LICENSE).
