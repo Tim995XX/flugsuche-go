@@ -1,5 +1,7 @@
 # flugsuche-go
 
+[![CI](https://github.com/Tim995XX/flugsuche-go/actions/workflows/ci.yml/badge.svg)](https://github.com/Tim995XX/flugsuche-go/actions/workflows/ci.yml)
+
 Ein kleiner Flugpreis-Vergleich in Go: Das Backend fragt mehrere Airline-Anbieter **parallel** ab, übersetzt deren **unterschiedliche JSON-Formate** in ein gemeinsames Modell, rechnet alle Preise in **EUR** um, verwirft langsame oder fehlerhafte Antworten nach einem Timeout, entfernt Duplikate und liefert die günstigsten Angebote zuerst. Antworten werden pro Anbieter **gecacht** (In-Memory oder Redis).
 
 ## Architektur

@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Formatierung prüfen
+        run: |
+          dateien="$(gofmt -l .)"
+          if [ -n "$dateien" ]; then
+            echo "Nicht formatiert: $dateien"
+            exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: Tests mit Race Detector
+        run: go test -race ./...
+
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Docker-Image bauen (ohne Veröffentlichung)
+        run: docker build -t flugsuche-go .
